@@ -1,0 +1,2 @@
+source venv/bin/activate
+python3 generate-report.py 0 2025-12-01 2025-12-31
