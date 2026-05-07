@@ -6,6 +6,7 @@ def get_settings():
     'colors': {
       'LATE': { 'text':'83390b', 'bg':'ffea95' },
       'PUBLIC_HOLIDAY': { 'text':'680c83', 'bg':'eeb7ff' },
+      'SPECIAL_WFH': { 'text':'680c83', 'bg':'eeb7ff' },
       'PRESENT': { 'text':'09791d', 'bg':'96ffa9' },
       'WFH': { 'text':'0a2583', 'bg':'aed1ff' },
       'HALF_DAY_WFH': { 'text':'0a2583', 'bg':'aed1ff' },
@@ -23,7 +24,7 @@ def generate_filename(emp_name, start_date, end_date):
   end_str = end_dt.strftime('%b%d')
   year = end_dt.strftime('%Y')
 
-  filename = f"reports/Attendance_{emp_name}_{start_str}-{end_str}_{year}.xlsx"
+  filename = f"reports/{emp_name}_{start_str}-{end_str}_{year}.xlsx"
   return filename
 
 
@@ -67,8 +68,9 @@ def get_attendance_report_query(emp_id, start_date, end_date, margin_in_mins):
 
       CASE
           WHEN ph.id IS NOT NULL THEN 'PUBLIC_HOLIDAY'
+          WHEN sw.id IS NOT NULL THEN 'SPECIAL_WFH'
           WHEN COALESCE(MAX(l.half_day_leave),0) = 1 AND COALESCE(MAX(l.half_day_wfh),0) = 1 THEN 'HALF_DAY_LEAVE_AND_WFH'
-            WHEN COALESCE(MAX(l.half_day_leave),0) = 1 AND MIN(a.entry) IS NOT NULL THEN 'HALF_DAY_LEAVE'
+          WHEN COALESCE(MAX(l.half_day_leave),0) = 1 AND MIN(a.entry) IS NOT NULL THEN 'HALF_DAY_LEAVE'
           WHEN COALESCE(MAX(l.half_day_wfh),0) = 1 AND MIN(a.entry) IS NOT NULL THEN 'HALF_DAY_WFH'
           WHEN MIN(a.entry) IS NOT NULL AND
             GREATEST(
@@ -100,7 +102,6 @@ def get_attendance_report_query(emp_id, start_date, end_date, margin_in_mins):
       ON e.emp_status IN (2,3)
       AND e.emp_other_id IS NOT NULL
       AND e.emp_other_id = {emp_id}
-
 
     LEFT JOIN employees_shift_history sh 
       ON sh.emp_other_id = e.emp_other_id
@@ -181,13 +182,35 @@ def get_attendance_report_query(emp_id, start_date, end_date, margin_in_mins):
           )
       )
 
-    LEFT JOIN attendance_public_holidays ph
-      ON ph.holiday_date = DATE_ADD(GREATEST('{start_date}', e.joined_date), INTERVAL n.n DAY)
-      # AND ph.shift_time = sh.shift_interval
+    -- PUBLIC_HOLIDAY special dates
+    LEFT JOIN attendance_special_dates ph
+      ON ph.type = 'PUBLIC_HOLIDAY'
+      AND DATE_ADD(GREATEST('{start_date}', e.joined_date), INTERVAL n.n DAY)
+        BETWEEN ph.start_date AND COALESCE(ph.end_date, ph.start_date)
+      # AND (
+      #   EXISTS (
+      #     SELECT 1 FROM attendance_special_date_shifts
+      #     WHERE special_date_id = ph.id
+      #       AND shift = sh.shift_interval
+      #   )
+      # )
+
+    -- WFH special dates
+    LEFT JOIN attendance_special_dates sw
+      ON sw.type = 'WFH'
+      AND DATE_ADD(GREATEST('{start_date}', e.joined_date), INTERVAL n.n DAY)
+        BETWEEN sw.start_date AND COALESCE(sw.end_date, sw.start_date)
+      # AND (
+      #   EXISTS (
+      #     SELECT 1 FROM attendance_special_date_shifts
+      #     WHERE special_date_id = sw.id
+      #       AND shift = sh.shift_interval
+      #   )
+      # )
 
     WHERE DATE_ADD(GREATEST('{start_date}', e.joined_date), INTERVAL n.n DAY) <= '{end_date}'
     AND WEEKDAY(DATE_ADD(GREATEST('{start_date}', e.joined_date), INTERVAL n.n DAY)) BETWEEN 0 AND 4
 
-    GROUP BY e.emp_other_id, n.n, sh.shift_interval, ph.id, e.joined_date
+    GROUP BY e.emp_other_id, n.n, sh.shift_interval, ph.id, sw.id, e.joined_date
     ORDER BY attendance_date;
   """
